@@ -661,4 +661,15 @@ def handle_stop(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-@bot.message_handler(commands
+@bot.message_handler(commands)
+    
+    const express = require("express");
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot is running 🚀");
+});
+
+app.listen(3000, () => {
+  console.log("Web server running...");
+});
