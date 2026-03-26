@@ -32,7 +32,7 @@ def install_requirements():
 init(autoreset=True)
 
 # ================== CONFIGURATION ==================
-CONFIG_FILE = "bot.js"
+CONFIG_FILE = "bot.py"
 
 # Default configuration
 default_config = {
