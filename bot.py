@@ -32,7 +32,7 @@ def install_requirements():
 init(autoreset=True)
 
 # ================== CONFIGURATION ==================
-CONFIG_FILE = "bot.py"
+CONFIG_FILE = "bot_config.json"
 
 # Default configuration
 default_config = {
@@ -663,13 +663,16 @@ def handle_stop(message):
 
 @bot.message_handler(commands)
     
-    const express = require("express");
-const app = express();
+    from flask import Flask
+import threading
 
-app.get("/", (req, res) => {
-  res.send("Bot is running 🚀");
-});
+app = Flask(__name__)
 
-app.listen(3000, () => {
-  console.log("Web server running...");
-});
+@app.route("/")
+def home():
+    return "Bot is running ✅"
+
+def run_server():
+    app.run(host="0.0.0.0", port=3000)
+
+threading.Thread(target=run_server).start()
